@@ -1,0 +1,746 @@
+<head>
+  <title>Minimum Viable Tetris</title>
+  <link rel="stylesheet" media="screen" href="https://fontlibrary.org/face/press-start-2p" type="text/css"/>
+  <script src="elm.js" charset="utf-8"></script>
+</head>
+<body style="background: black; color: white;">
+  <div style="display: flex;">
+    <div style="display: flex; flex-direction: column; font-family: PressStart2PRegular, sans-serif;">
+      <h1>
+        Minimum <br>
+        Viable <br>
+        Tetris
+      </h1>
+      <p>
+        Rotate block: Up arrow <br><br>
+        Drop block: Down arrow <br><br>
+        Pause game: P
+      </p>
+    </div>
+    <div id="elm"></div>
+    <div id="code" style="overflow: auto;">
+      <pre style="white-space: pre-wrap;">
+        <code class="language-elm">
+module Main exposing (Msg(..), init, main, subscriptions, update, view)
+
+import Browser
+import Browser.Events exposing (..)
+import Html exposing (div)
+import Json.Decode as Decode exposing (..)
+import Random
+import Svg exposing (..)
+import Svg.Attributes as Attr exposing (..)
+import Time
+
+
+main =
+    Browser.element
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }
+
+
+type alias Model =
+    { laidBlocks : Coordinates
+    , blockInPlay : Block
+    , seedForNextBlock : Random.Seed
+    , pausedOrGameOver : PausedOrGameOver
+    , windowHeight : Int
+    }
+
+
+type alias Block =
+    { shape : Shape, coords : Coordinates }
+
+
+type alias Coordinates =
+    List Coordinate
+
+
+type alias Coordinate =
+    ( Int, Int )
+
+
+type Shape
+    = -- There are seven blocks. https://en.wikipedia.org/wiki/Tetromino
+      -- Each has one orientation (square), two orientations (straight, S, Z) or four orientations (L, J, T).
+      Square
+    | Straight HorizontalOrVertical
+    | Z HorizontalOrVertical
+    | S HorizontalOrVertical
+    | L UpDownLeftOrRight
+    | J UpDownLeftOrRight
+    | T UpDownLeftOrRight
+
+
+type HorizontalOrVertical
+    = Horizontal
+    | Vertical
+
+
+type UpDownLeftOrRight
+    = Up
+    | RightFacing
+    | Down
+    | LeftFacing
+
+
+
+-- RightFacing and LeftFacing only because of name clash with type Direction. TODO move into separate modules, to namespace them.
+
+
+type PausedOrGameOver
+    = InPlay
+    | Paused
+    | GameOver
+
+
+init : { windowHeight : Int, seedForRandomBlocks : Int } -> ( Model, Cmd msg )
+init { windowHeight, seedForRandomBlocks } =
+    ( let
+        ( firstBlock, seedForNextBlock ) =
+            Random.step randomBlock (Random.initialSeed seedForRandomBlocks)
+      in
+      { laidBlocks = []
+      , blockInPlay = firstBlock
+      , seedForNextBlock = seedForNextBlock
+      , pausedOrGameOver = InPlay
+      , windowHeight = windowHeight
+      }
+    , Cmd.none
+    )
+
+
+randomBlock : Random.Generator Block
+randomBlock =
+    Random.uniform (Block Square square)
+        [ Block (Z Horizontal) z
+        , Block (S Horizontal) s
+        , Block (Straight Horizontal) straight
+        , Block (T Up) t
+        , Block (L Up) l
+        , Block (J Up) j
+        ]
+
+
+
+-- BLOCKS
+-- block coordinates are in A,B,C,D order
+-- the leftmost square is 4 except in straight where it's 3, e.g. square B in block T
+
+
+t =
+    {-
+         A
+       B C D
+    -}
+    [ ( 5, -2 ), ( 4, -1 ), ( 5, -1 ), ( 6, -1 ) ]
+
+
+l =
+    {-
+           A
+       B C D
+    -}
+    [ ( 6, -2 ), ( 4, -1 ), ( 5, -1 ), ( 6, -1 ) ]
+
+
+j =
+    {-
+       A
+       B C D
+    -}
+    [ ( 4, -2 ), ( 4, -1 ), ( 5, -1 ), ( 6, -1 ) ]
+
+
+z =
+    {-
+       A B
+         C D
+    -}
+    [ ( 4, -2 ), ( 5, -2 ), ( 5, -1 ), ( 6, -1 ) ]
+
+
+s =
+    {-
+         A B
+       C D
+    -}
+    [ ( 5, -2 ), ( 6, -2 ), ( 4, -1 ), ( 5, -1 ) ]
+
+
+straight =
+    {-
+       A B C D
+    -}
+    [ ( 3, -1 ), ( 4, -1 ), ( 5, -1 ), ( 6, -1 ) ]
+
+
+square =
+    {-
+       A B
+       C D
+    -}
+    [ ( 4, -2 ), ( 5, -2 ), ( 4, -1 ), ( 5, -1 ) ]
+
+
+
+-- UPDATE
+
+
+type Msg
+    = MoveBlock Direction
+    | Tick Time.Posix
+    | PauseUnpause
+    | WindowResize Int Int -- width height
+    | NoOp -- see toMsg
+
+
+type Direction
+    = Left
+    | Right
+    | Rotate
+    | Drop
+
+
+update : Msg -> Model -> ( Model, Cmd msg )
+update msg model =
+    case msg of
+        MoveBlock direction ->
+            ( let
+                movedBlock =
+                    case direction of
+                        Left ->
+                            moveLeft model.blockInPlay
+
+                        Right ->
+                            moveRight model.blockInPlay
+
+                        Drop ->
+                            dropBlock model.blockInPlay
+
+                        Rotate ->
+                            rotate model.blockInPlay
+              in
+              if blocksWillOverlap movedBlock model.laidBlocks || blockWillBeOutOfBounds movedBlock || not (model.pausedOrGameOver == InPlay) then
+                -- no change, i.e. no move
+                model
+
+              else
+                -- move the block
+                { model | blockInPlay = movedBlock }
+            , Cmd.none
+            )
+
+        Tick _ ->
+            ( -- either drop the block or move the game on
+              if not (blocksWillOverlap (dropBlock model.blockInPlay) model.laidBlocks || blockWillBeOutOfBounds (dropBlock model.blockInPlay)) then
+                -- drop the block
+                { model | blockInPlay = dropBlock model.blockInPlay }
+
+              else
+                -- move the game on
+                let
+                    ( block, seedForNextBlock ) =
+                        Random.step randomBlock model.seedForNextBlock
+
+                    squaresAfterAnyRowsCleared =
+                        let
+                            lookAtRow row squares =
+                                let
+                                    numberOfSquaresOnRow row_ squares_ =
+                                        case squares_ of
+                                            [] ->
+                                                0
+
+                                            ( x, y ) :: sqs ->
+                                                (if y == row_ then
+                                                    1
+
+                                                 else
+                                                    0
+                                                )
+                                                    + numberOfSquaresOnRow row_ sqs
+
+                                    squaresLessOneRow fullRow =
+                                        List.filter (\( x, y ) -> y /= fullRow)
+                                            -- remove row
+                                            >> List.map
+                                                (\( x, y ) ->
+                                                    if y < fullRow then
+                                                        -- drops rows above removed row
+                                                        ( x, drop y )
+
+                                                    else
+                                                        -- rows below removed row not affected
+                                                        ( x, y )
+                                                )
+                                in
+                                -- the below depends on there being 10 squares in a row
+                                if numberOfSquaresOnRow row squares == 10 then
+                                    squaresLessOneRow row squares
+
+                                else
+                                    squares
+                        in
+                        lookAtRow 0 (model.laidBlocks ++ model.blockInPlay.coords)
+                            |> lookAtRow 1
+                            |> lookAtRow 2
+                            |> lookAtRow 3
+                            |> lookAtRow 4
+                            |> lookAtRow 5
+                            |> lookAtRow 6
+                            |> lookAtRow 7
+                            |> lookAtRow 8
+                            |> lookAtRow 9
+                            |> lookAtRow 10
+                            |> lookAtRow 11
+                            |> lookAtRow 12
+                            |> lookAtRow 13
+                            |> lookAtRow 14
+                            |> lookAtRow 15
+                            |> lookAtRow 16
+                            |> lookAtRow 17
+                            |> lookAtRow 18
+                            |> lookAtRow 19
+                in
+                if anySquaresAboveTopOfScreen squaresAfterAnyRowsCleared then
+                    { model | pausedOrGameOver = GameOver }
+
+                else
+                    { model
+                        | laidBlocks = squaresAfterAnyRowsCleared
+                        , blockInPlay = block
+                        , seedForNextBlock = seedForNextBlock
+                    }
+            , Cmd.none
+            )
+
+        PauseUnpause ->
+            ( { model
+                | pausedOrGameOver =
+                    case model.pausedOrGameOver of
+                        InPlay ->
+                            Paused
+
+                        Paused ->
+                            InPlay
+
+                        GameOver ->
+                            GameOver
+              }
+            , Cmd.none
+            )
+
+        WindowResize _ windowHeight ->
+            ( { model | windowHeight = windowHeight }, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+drop y =
+    y + 1
+
+
+anySquaresAboveTopOfScreen squares =
+    List.any (\( _, y ) -> y < 0) squares
+
+
+blocksWillOverlap : Block -> Coordinates -> Bool
+blocksWillOverlap blockInPlay laidBlocks =
+    List.any (\square_ -> List.any (\square__ -> square_ == square__) laidBlocks) blockInPlay.coords
+
+
+blockWillBeOutOfBounds : Block -> Bool
+blockWillBeOutOfBounds block =
+    -- past left or right border or under floor
+    List.any (\( x, y ) -> x < 0 || x >= 10 || y >= 20) block.coords
+
+
+rotate : Block -> Block
+rotate ({ shape, coords } as block) =
+    -- rotate clockwise
+    case coords of
+        [ ( ax, ay ), ( bx, by ), ( cx, cy ), ( dx, dy ) ] ->
+            case shape of
+                Z orientation ->
+                    case orientation of
+                        Horizontal ->
+                            Block (Z Vertical)
+                                [ ( ax + 2, ay )
+                                , ( bx + 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy + 1 )
+                                ]
+
+                        Vertical ->
+                            Block (Z Horizontal)
+                                [ ( ax - 2, ay )
+                                , ( bx - 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy - 1 )
+                                ]
+
+                S orientation ->
+                    case orientation of
+                        Horizontal ->
+                            {- S rotates around D.
+                                 A B -> C
+                               C D      D A
+                                          B
+                            -}
+                            Block (S Vertical)
+                                [ ( ax + 1, ay + 1 )
+                                , ( bx, by + 2 )
+                                , ( cx + 1, cy - 1 )
+                                , ( dx, dy )
+                                ]
+
+                        Vertical ->
+                            {- anticlockwise
+                               C        A B
+                               D A -> C D
+                                 B
+                            -}
+                            Block (S Horizontal)
+                                [ ( ax - 1, ay - 1 )
+                                , ( bx, by - 2 )
+                                , ( cx - 1, cy + 1 )
+                                , ( dx, dy )
+                                ]
+
+                Straight orientation ->
+                    case orientation of
+                        Horizontal ->
+                            Block (Straight Vertical)
+                                [ ( ax + 1, ay - 2 )
+                                , ( bx, by - 1 )
+                                , ( cx - 1, cy )
+                                , ( dx - 2, dy + 1 )
+                                ]
+
+                        Vertical ->
+                            Block (Straight Horizontal)
+                                [ ( ax - 1, ay + 2 )
+                                , ( bx, by + 1 )
+                                , ( cx + 1, cy )
+                                , ( dx + 2, dy - 1 )
+                                ]
+
+                T orientation ->
+                    case orientation of
+                        Up ->
+                            {-
+                               T rotates around C
+                                 A      B
+                               B C D -> C A
+                                        D
+                            -}
+                            Block (T LeftFacing)
+                                [ ( ax + 1, ay + 1 )
+                                , ( bx + 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy + 1 )
+                                ]
+
+                        LeftFacing ->
+                            {-
+                               B
+                               C A -> D C B
+                               D        A
+                            -}
+                            Block (T Down)
+                                [ ( ax - 1, ay + 1 )
+                                , ( bx + 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy - 1 )
+                                ]
+
+                        Down ->
+                            {-
+                                          D
+                               D C B -> A C
+                                 A        B
+                            -}
+                            Block (T RightFacing)
+                                [ ( ax - 1, ay - 1 )
+                                , ( bx - 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy - 1 )
+                                ]
+
+                        RightFacing ->
+                            {-
+                                 D      A
+                               A C -> B C D
+                                 B
+                            -}
+                            Block (T Up)
+                                [ ( ax + 1, ay - 1 )
+                                , ( bx - 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy + 1 )
+                                ]
+
+                L orientation ->
+                    case orientation of
+                        Up ->
+                            {- L rotates around C.
+                                   A    B
+                               B C D -> C
+                                        D A
+                            -}
+                            Block (L RightFacing)
+                                [ ( ax, ay + 2 )
+                                , ( bx + 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy + 1 )
+                                ]
+
+                        RightFacing ->
+                            {-
+                               B
+                               C   -> D C B
+                               D A    A
+                            -}
+                            Block (L Down)
+                                [ ( ax - 2, ay )
+                                , ( bx + 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy - 1 )
+                                ]
+
+                        Down ->
+                            {-
+                                        A D
+                               D C B ->   C
+                               A          B
+                            -}
+                            Block (L LeftFacing)
+                                [ ( ax, ay - 2 )
+                                , ( bx - 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy - 1 )
+                                ]
+
+                        LeftFacing ->
+                            {-
+                               A D        A
+                                 C -> B C D
+                                 B
+                            -}
+                            Block (L Up)
+                                [ ( ax + 2, ay )
+                                , ( bx - 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy + 1 )
+                                ]
+
+                J orientation ->
+                    case orientation of
+                        Up ->
+                            Block (J RightFacing)
+                                [ ( ax + 2, ay )
+                                , ( bx + 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy + 1 )
+                                ]
+
+                        RightFacing ->
+                            Block (J Down)
+                                [ ( ax, ay + 2 )
+                                , ( bx + 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx - 1, dy - 1 )
+                                ]
+
+                        Down ->
+                            Block (J LeftFacing)
+                                [ ( ax - 2, ay )
+                                , ( bx - 1, by + 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy - 1 )
+                                ]
+
+                        LeftFacing ->
+                            Block (J Up)
+                                [ ( ax, ay - 2 )
+                                , ( bx - 1, by - 1 )
+                                , ( cx, cy )
+                                , ( dx + 1, dy + 1 )
+                                ]
+
+                Square ->
+                    block
+
+        _ ->
+            block
+
+
+dropBlock : Block -> Block
+dropBlock block =
+    { block | coords = List.map (\( x, y ) -> ( x, drop y )) block.coords }
+
+
+moveRight : Block -> Block
+moveRight block =
+    { block | coords = List.map (\( x, y ) -> ( x + 1, y )) block.coords }
+
+
+moveLeft : Block -> Block
+moveLeft block =
+    { block | coords = List.map (\( x, y ) -> ( x - 1, y )) block.coords }
+
+
+
+-- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.batch
+        [ Browser.Events.onKeyDown (Debug.log "" keyDecoder)
+        , if model.pausedOrGameOver == InPlay then
+            -- tick every 1000ms
+            Time.every 1000 Tick
+
+          else
+            Sub.none
+        , Browser.Events.onResize WindowResize
+        ]
+
+
+keyDecoder : Decoder Msg
+keyDecoder =
+    -- https://github.com/elm/browser/blob/1.0.0/notes/keyboard.md
+    Decode.map toMsg (field "key" Decode.string)
+
+
+toMsg : String -> Msg
+toMsg key =
+    case key of
+        -- https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+        "ArrowDown" ->
+            MoveBlock Drop
+
+        "ArrowLeft" ->
+            MoveBlock Left
+
+        "ArrowRight" ->
+            MoveBlock Right
+
+        "ArrowUp" ->
+            MoveBlock Rotate
+
+        "p" ->
+            PauseUnpause
+
+        _ ->
+            NoOp
+
+
+
+-- VIEW
+
+
+view : Model -> Svg msg
+view model =
+    let
+        grid : Coordinates -> String -> Int -> List (Svg msg)
+        grid squares colour scaleFactor_ =
+            let
+                square_ : Int -> Int -> Svg msg
+                square_ x y =
+                    rect
+                        [ Attr.x (String.fromInt (x * scaleFactor_))
+                        , Attr.y (String.fromInt (y * scaleFactor_))
+                        , Attr.width (String.fromInt scaleFactor_)
+                        , Attr.height (String.fromInt scaleFactor_)
+                        , fill colour
+                        ]
+                        []
+            in
+            List.map (\( x, y ) -> square_ x y) squares
+
+        -- the window height determines what the height of the game will be. the width must be half of the height. the square size must be one tenth of the width.
+        height =
+            width * 2
+
+        width =
+            10
+
+        -- 10 squares in one row
+        scaleFactor =
+            (model.windowHeight - 20) // height
+    in
+    div []
+        -- div only to help with layout on final page
+        [ svg
+            [ -- grid
+              x "0"
+            , y "0"
+            , Attr.height (String.fromInt (height * scaleFactor))
+            , Attr.width (String.fromInt (width * scaleFactor))
+            ]
+            ([ rect
+                [ Attr.width (String.fromInt (width * scaleFactor))
+                , Attr.height (String.fromInt (height * scaleFactor))
+                , fill "white"
+                , stroke "black"
+                ]
+                []
+             ]
+                ++ grid (model.laidBlocks ++ model.blockInPlay.coords)
+                    (if not (model.pausedOrGameOver == InPlay) then
+                        "grey"
+
+                     else
+                        "black"
+                    )
+                    scaleFactor
+            )
+        ]
+        </code>
+      </pre>
+    </div>
+    <script type="text/javascript">
+    // get window size to set height of code to start with
+document
+  .getElementById("code")
+  .setAttribute(
+    "style",
+    "height: " +
+      (window.innerHeight - 40) +
+      ";overflow: auto; margin-left: 20px;"
+  );
+
+// set height of code whenever window resizes
+window.addEventListener("resize", function(event) {
+  document
+    .getElementById("code")
+    .setAttribute(
+      "style",
+      "height: " +
+        (event.target.innerHeight - 40) +
+        ";overflow: auto; margin-left: 20px;"
+    );
+});
+</script>
+  </div>
+
+  <script>
+  var app = Elm.Main.init({
+  node: document.getElementById("elm"),
+  flags: {
+    windowHeight: window.innerHeight,
+    seedForRandomBlocks: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
+  }
+});
+/*app.ports.saveGame.subscribe(game => {
+  localStorage.setItem("game", game);
+});*/
+</script>
+</body>
