@@ -1,9 +1,9 @@
 <head>
   <title>Minimum Viable Tetris</title>
   <link rel="stylesheet" media="screen" href="https://fontlibrary.org/face/press-start-2p" type="text/css"/>
-  <script src="elm.js" charset="utf-8"></script>
+  <script src="../assets/elm.js" charset="utf-8"></script>
 </head>
-<body style="background: black; color: white;">
+<body>
   <div style="display: flex;">
     <div style="display: flex; flex-direction: column; font-family: PressStart2PRegular, sans-serif;">
       <h1>
@@ -12,9 +12,9 @@
         Tetris
       </h1>
       <p>
+        Start/pause game: P <br><br>
         Rotate block: Up arrow <br><br>
-        Drop block: Down arrow <br><br>
-        Pause game: P
+        Drop block: Down arrow
       </p>
     </div>
     <div id="elm"></div>
@@ -26,6 +26,7 @@ module Main exposing (Msg(..), init, main, subscriptions, update, view)
 import Browser
 import Browser.Events exposing (..)
 import Html exposing (div)
+import Html.Attributes
 import Json.Decode as Decode exposing (..)
 import Random
 import Svg exposing (..)
@@ -42,11 +43,15 @@ main =
         }
 
 
+
+-- MODEL
+
+
 type alias Model =
     { laidBlocks : Coordinates
     , blockInPlay : Block
     , seedForNextBlock : Random.Seed
-    , pausedOrGameOver : PausedOrGameOver
+    , gameState : GameState
     , windowHeight : Int
     }
 
@@ -91,7 +96,7 @@ type UpDownLeftOrRight
 -- RightFacing and LeftFacing only because of name clash with type Direction. TODO move into separate modules, to namespace them.
 
 
-type PausedOrGameOver
+type GameState
     = InPlay
     | Paused
     | GameOver
@@ -106,29 +111,17 @@ init { windowHeight, seedForRandomBlocks } =
       { laidBlocks = []
       , blockInPlay = firstBlock
       , seedForNextBlock = seedForNextBlock
-      , pausedOrGameOver = InPlay
+      , gameState = Paused
       , windowHeight = windowHeight
       }
     , Cmd.none
     )
 
 
-randomBlock : Random.Generator Block
-randomBlock =
-    Random.uniform (Block Square square)
-        [ Block (Z Horizontal) z
-        , Block (S Horizontal) s
-        , Block (Straight Horizontal) straight
-        , Block (T Up) t
-        , Block (L Up) l
-        , Block (J Up) j
-        ]
-
-
 
 -- BLOCKS
 -- block coordinates are in A,B,C,D order
--- the leftmost square is 4 except in straight where it's 3, e.g. square B in block T
+-- the leftmost square, e.g. square B in block T, is at x = 4 except in straight where it's 3
 
 
 t =
@@ -186,6 +179,18 @@ square =
     [ ( 4, -2 ), ( 5, -2 ), ( 4, -1 ), ( 5, -1 ) ]
 
 
+randomBlock : Random.Generator Block
+randomBlock =
+    Random.uniform (Block Square square)
+        [ Block (Z Horizontal) z
+        , Block (S Horizontal) s
+        , Block (Straight Horizontal) straight
+        , Block (T Up) t
+        , Block (L Up) l
+        , Block (J Up) j
+        ]
+
+
 
 -- UPDATE
 
@@ -224,7 +229,7 @@ update msg model =
                         Rotate ->
                             rotate model.blockInPlay
               in
-              if blocksWillOverlap movedBlock model.laidBlocks || blockWillBeOutOfBounds movedBlock || not (model.pausedOrGameOver == InPlay) then
+              if blocksWillOverlap movedBlock model.laidBlocks || blockWillBeOutOfBounds movedBlock || not (model.gameState == InPlay) then
                 -- no change, i.e. no move
                 model
 
@@ -305,9 +310,12 @@ update msg model =
                             |> lookAtRow 17
                             |> lookAtRow 18
                             |> lookAtRow 19
+
+                    -- NOTE this depends on there being 20 rows, so this must not change unless that can change with it
+                    -- HACK because I couldn't work out how to do this recursively. Trying to do it recursively perhaps should have been one of the last things we try to do, and use the List functions for now.
                 in
                 if anySquaresAboveTopOfScreen squaresAfterAnyRowsCleared then
-                    { model | pausedOrGameOver = GameOver }
+                    { model | gameState = GameOver }
 
                 else
                     { model
@@ -320,8 +328,8 @@ update msg model =
 
         PauseUnpause ->
             ( { model
-                | pausedOrGameOver =
-                    case model.pausedOrGameOver of
+                | gameState =
+                    case model.gameState of
                         InPlay ->
                             Paused
 
@@ -603,7 +611,7 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
         [ Browser.Events.onKeyDown (Debug.log "" keyDecoder)
-        , if model.pausedOrGameOver == InPlay then
+        , if model.gameState == InPlay then
             -- tick every 1000ms
             Time.every 1000 Tick
 
@@ -646,6 +654,14 @@ toMsg key =
 -- VIEW
 
 
+blockColor gameState =
+    if not (gameState == InPlay) then
+        "grey"
+
+    else
+        "black"
+
+
 view : Model -> Svg msg
 view model =
     let
@@ -676,7 +692,7 @@ view model =
         scaleFactor =
             (model.windowHeight - 20) // height
     in
-    div []
+    div [ Html.Attributes.style "border" "2px solid" ]
         -- div only to help with layout on final page
         [ svg
             [ -- grid
@@ -684,22 +700,18 @@ view model =
             , y "0"
             , Attr.height (String.fromInt (height * scaleFactor))
             , Attr.width (String.fromInt (width * scaleFactor))
+            , stroke "white"
+            , strokeWidth "2"
             ]
             ([ rect
                 [ Attr.width (String.fromInt (width * scaleFactor))
                 , Attr.height (String.fromInt (height * scaleFactor))
                 , fill "white"
-                , stroke "black"
                 ]
                 []
              ]
                 ++ grid (model.laidBlocks ++ model.blockInPlay.coords)
-                    (if not (model.pausedOrGameOver == InPlay) then
-                        "grey"
-
-                     else
-                        "black"
-                    )
+                    (blockColor model.gameState)
                     scaleFactor
             )
         ]

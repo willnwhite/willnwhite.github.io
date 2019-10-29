@@ -4393,7 +4393,7 @@ function _Time_getZoneName()
 		callback(_Scheduler_succeed(name));
 	});
 }
-var author$project$Main$InPlay = {$: 'InPlay'};
+var author$project$Main$Paused = {$: 'Paused'};
 var author$project$Main$Block = F2(
 	function (shape, coords) {
 		return {coords: coords, shape: shape};
@@ -5181,10 +5181,11 @@ var author$project$Main$init = function (_n0) {
 				elm$random$Random$initialSeed(seedForRandomBlocks));
 			var firstBlock = _n1.a;
 			var seedForNextBlock = _n1.b;
-			return {blockInPlay: firstBlock, laidBlocks: _List_Nil, pausedOrGameOver: author$project$Main$InPlay, seedForNextBlock: seedForNextBlock, windowHeight: windowHeight};
+			return {blockInPlay: firstBlock, gameState: author$project$Main$Paused, laidBlocks: _List_Nil, seedForNextBlock: seedForNextBlock, windowHeight: windowHeight};
 		}(),
 		elm$core$Platform$Cmd$none);
 };
+var author$project$Main$InPlay = {$: 'InPlay'};
 var author$project$Main$Tick = function (a) {
 	return {$: 'Tick', a: a};
 };
@@ -6106,12 +6107,11 @@ var author$project$Main$subscriptions = function (model) {
 			[
 				elm$browser$Browser$Events$onKeyDown(
 				A2(elm$core$Debug$log, '', author$project$Main$keyDecoder)),
-				_Utils_eq(model.pausedOrGameOver, author$project$Main$InPlay) ? A2(elm$time$Time$every, 1000, author$project$Main$Tick) : elm$core$Platform$Sub$none,
+				_Utils_eq(model.gameState, author$project$Main$InPlay) ? A2(elm$time$Time$every, 1000, author$project$Main$Tick) : elm$core$Platform$Sub$none,
 				elm$browser$Browser$Events$onResize(author$project$Main$WindowResize)
 			]));
 };
 var author$project$Main$GameOver = {$: 'GameOver'};
-var author$project$Main$Paused = {$: 'Paused'};
 var elm$core$List$any = F2(
 	function (isOkay, list) {
 		any:
@@ -6501,7 +6501,7 @@ var author$project$Main$update = F2(
 									return author$project$Main$rotate(model.blockInPlay);
 							}
 						}();
-						return (A2(author$project$Main$blocksWillOverlap, movedBlock, model.laidBlocks) || (author$project$Main$blockWillBeOutOfBounds(movedBlock) || (!_Utils_eq(model.pausedOrGameOver, author$project$Main$InPlay)))) ? model : _Utils_update(
+						return (A2(author$project$Main$blocksWillOverlap, movedBlock, model.laidBlocks) || (author$project$Main$blockWillBeOutOfBounds(movedBlock) || (!_Utils_eq(model.gameState, author$project$Main$InPlay)))) ? model : _Utils_update(
 							model,
 							{blockInPlay: movedBlock});
 					}(),
@@ -6622,7 +6622,7 @@ var author$project$Main$update = F2(
 							var seedForNextBlock = _n2.b;
 							return author$project$Main$anySquaresAboveTopOfScreen(squaresAfterAnyRowsCleared) ? _Utils_update(
 								model,
-								{pausedOrGameOver: author$project$Main$GameOver}) : _Utils_update(
+								{gameState: author$project$Main$GameOver}) : _Utils_update(
 								model,
 								{blockInPlay: block, laidBlocks: squaresAfterAnyRowsCleared, seedForNextBlock: seedForNextBlock});
 						}
@@ -6633,8 +6633,8 @@ var author$project$Main$update = F2(
 					_Utils_update(
 						model,
 						{
-							pausedOrGameOver: function () {
-								var _n7 = model.pausedOrGameOver;
+							gameState: function () {
+								var _n7 = model.gameState;
 								switch (_n7.$) {
 									case 'InPlay':
 										return author$project$Main$Paused;
@@ -6657,13 +6657,19 @@ var author$project$Main$update = F2(
 				return _Utils_Tuple2(model, elm$core$Platform$Cmd$none);
 		}
 	});
+var author$project$Main$blockColor = function (gameState) {
+	return (!_Utils_eq(gameState, author$project$Main$InPlay)) ? 'grey' : 'black';
+};
 var elm$html$Html$div = _VirtualDom_node('div');
+var elm$virtual_dom$VirtualDom$style = _VirtualDom_style;
+var elm$html$Html$Attributes$style = elm$virtual_dom$VirtualDom$style;
 var elm$svg$Svg$trustedNode = _VirtualDom_nodeNS('http://www.w3.org/2000/svg');
 var elm$svg$Svg$rect = elm$svg$Svg$trustedNode('rect');
 var elm$svg$Svg$svg = elm$svg$Svg$trustedNode('svg');
 var elm$svg$Svg$Attributes$fill = _VirtualDom_attribute('fill');
 var elm$svg$Svg$Attributes$height = _VirtualDom_attribute('height');
 var elm$svg$Svg$Attributes$stroke = _VirtualDom_attribute('stroke');
+var elm$svg$Svg$Attributes$strokeWidth = _VirtualDom_attribute('stroke-width');
 var elm$svg$Svg$Attributes$width = _VirtualDom_attribute('width');
 var elm$svg$Svg$Attributes$x = _VirtualDom_attribute('x');
 var elm$svg$Svg$Attributes$y = _VirtualDom_attribute('y');
@@ -6702,7 +6708,10 @@ var author$project$Main$view = function (model) {
 		});
 	return A2(
 		elm$html$Html$div,
-		_List_Nil,
+		_List_fromArray(
+			[
+				A2(elm$html$Html$Attributes$style, 'border', '2px solid')
+			]),
 		_List_fromArray(
 			[
 				A2(
@@ -6714,7 +6723,9 @@ var author$project$Main$view = function (model) {
 						elm$svg$Svg$Attributes$height(
 						elm$core$String$fromInt(height * scaleFactor)),
 						elm$svg$Svg$Attributes$width(
-						elm$core$String$fromInt(width * scaleFactor))
+						elm$core$String$fromInt(width * scaleFactor)),
+						elm$svg$Svg$Attributes$stroke('white'),
+						elm$svg$Svg$Attributes$strokeWidth('2')
 					]),
 				_Utils_ap(
 					_List_fromArray(
@@ -6727,15 +6738,14 @@ var author$project$Main$view = function (model) {
 									elm$core$String$fromInt(width * scaleFactor)),
 									elm$svg$Svg$Attributes$height(
 									elm$core$String$fromInt(height * scaleFactor)),
-									elm$svg$Svg$Attributes$fill('white'),
-									elm$svg$Svg$Attributes$stroke('black')
+									elm$svg$Svg$Attributes$fill('white')
 								]),
 							_List_Nil)
 						]),
 					A3(
 						grid,
 						_Utils_ap(model.laidBlocks, model.blockInPlay.coords),
-						(!_Utils_eq(model.pausedOrGameOver, author$project$Main$InPlay)) ? 'grey' : 'black',
+						author$project$Main$blockColor(model.gameState),
 						scaleFactor)))
 			]));
 };
